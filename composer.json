@@ -1,0 +1,12 @@
+{
+    "name": "giuppe/belvedere",
+    "description": "A static site generator with content injection",
+    "minimum-stability": "stable",
+    "license": "GPL-3.0",
+    "authors": [
+        {
+            "name": "Giuseppe D'Aquì",
+            "email": "giuseppe.da@gmail.com"
+        }
+    ]
+}
