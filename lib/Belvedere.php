@@ -3,6 +3,8 @@ require_once "vendors/simple_html_dom/simple_html_dom.php";
 require_once 'vendors/markdown/markdown.php';
 require_once 'vendors/Cake/Utility/Sanitize.php';
 
+mb_internal_encoding("UTF-8");
+
 class Belvedere
 {
 
@@ -156,8 +158,8 @@ class Belvedere
                 "error" => "Unable to load file"
             );
         }
-        $metadata = $this->read_metadata($file_content);
-        $text = trim($this->strip_metadata($file_content));
+        $metadata = $this->read_properties($file_content);
+        $text = trim($this->strip_properties($file_content));
         return array(
             'metadata' => $metadata,
             'text' => $text,
@@ -218,7 +220,7 @@ class Belvedere
      * @param string $content            
      * @return array metadata variable names as keys and values as values
      */
-    public function read_metadata($content)
+    public function read_properties($content)
     {
         $results = array();
         $matches = array();
@@ -235,10 +237,10 @@ class Belvedere
 
     public function read_content($content)
     {
-        return Markdown($this->strip_metadata($content));
+        return Markdown($this->strip_properties($content));
     }
 
-    public function strip_metadata($content)
+    public function strip_properties($content)
     {
         $result = "";
         foreach (preg_split("/((\r?\n)|(\r\n?))/", $content) as $line) {
@@ -246,6 +248,188 @@ class Belvedere
         }
         return $result;
     }
+
+    var $selection_contexts = array();
+
+    /**
+     * @var boolean
+     */
+    var $temp_dom_append;
+    /**
+     * @var
+     */
+    var $current_theme;
+
+    public function _create($tagname){
+        $this->selection_contexts[] = array(
+            "tag"=> sprintf("<%s>", $tagname),
+            "target_selector" =>"",
+            "op" => "create"
+        );
+    }
+
+    public function _append($selector){
+        $current_sel = array_pop($this->selection_contexts);
+        $current_sel['target']=$selector;
+        $current_sel['insert_type']="append";
+        array_push($this->selection_contexts, $current_sel);
+
+    }
+
+    public function _setTheme($filename){
+        $this->current_theme = file_get_html($filename);
+    }
+
+    public function _setText($text){
+        $current_sel = array_pop($this->selection_contexts);
+        $current_sel["set_text"] = $text;
+        array_push($this->selection_contexts, $current_sel);
+    }
+
+    public function _setAttr($attr, $content){
+        if(empty($this->selection_contexts)){
+            $this->blv_log("Error: setAttr: no selection context");
+        }
+        else {
+        $current_sel = array_pop($this->selection_contexts);
+        //$this->blv_log(sprintf("setAttr %s, %s on %s", $attr,  $content, print_r($this->temp_dom, true)));
+
+            $current_sel['set_attributes'][] = array($attr=>$content);
+            array_push($this->selection_contexts, $current_sel);
+        }
+
+    }
+
+    public function _remove($selector){
+        $this->selection_contexts[] = array(
+            "op" => "remove",
+            "selector" => $selector,
+
+    );
+    }
+
+    public function _select($selector){
+        $this->selection_contexts[] = array(
+            "op" => "select",
+            "selector" => $selector,
+
+        );
+
+    }
+
+    private function handle_create($theme_html, $tag, $target, $insert_type="append", $set_text=null, $set_attributes=array()){
+        $theme = str_get_html($theme_html);
+        $targets = $theme->find($target);
+        foreach($targets as $t){
+            $new_tag = str_get_html($tag);
+            if(!empty($set_text)){
+                $new_tag->find($tag, 0)->innertext = $set_text;
+            }
+            if(!empty($set_attributes)){
+                foreach($set_attributes as $attribute){
+                    list($attr_name, $attr_value) = each($attribute);
+
+                    $new_tag->firstChild()->$attr_name = $attr_value;
+                }
+            }
+            if($insert_type=="append") {
+                $text = strval($new_tag);
+                $t->innertext = $t->innertext.$text;
+            }
+            elseif($insert_type=="insert"){
+                $t->innertext = $text.$t->innertext;
+            }
+        }
+        return strval($theme);
+    }
+
+    private function handle_remove($theme_html, $target){
+        $theme = str_get_html($theme_html);
+        $targets = $theme->find($target);
+        foreach($targets as $t){
+            $t->outertext="";
+        }
+        return strval($theme);
+    }
+
+    private function handle_select($theme_html, $selector, $set_text=null, $set_attributes=array()){
+        $theme = str_get_html($theme_html);
+        $targets = $theme->find($selector);
+        foreach($targets as $t){
+            if(!empty($set_text)){
+                $t->innertext = $set_text;
+            }
+            if(!empty($set_attributes)){
+                foreach($set_attributes as $attribute){
+                    list($attr, $attr_value) = each($attribute);
+                    $t->$attr = $attr_value;
+                }
+            }
+        }
+        return strval($theme);
+    }
+
+    private $content_text = "";
+    private $content_properties = array();
+    public function _load($filename){
+        $this->blv_log("Loading file: ".$filename);
+        $content = file_get_contents($filename);
+        $this->blv_log("Loaded content: " . htmlentities($content));
+        $this->content_properties = $this->read_properties($content);
+        $this->content_text = $this->read_content($content);
+        $this->content_properties["@content"] = $content;
+        $current_sel = array_pop($this->selection_contexts);
+        $current_sel['load']="file";
+        array_push($this->selection_contexts, $current_sel);
+    }
+
+    private function _preprocess_properties(){
+        $current_sel = array_pop($this->selection_contexts);
+        if(!empty($current_sel['set_attributes'])){
+            foreach($current_sel['set_attributes'] as $attr_key=>$attribute){
+                list($attr_name, $attr_value) = each($attribute);
+                if(mb_strpos($attr_value,"@")===0){
+                    $new_attr_value = $this->content_properties[$attr_value];
+                    $current_sel['set_attributes'][$attr_key] = array($attr_name=> $new_attr_value);
+                }
+            }
+        }
+        if(!empty($current_sel['set_text'])){
+            if(mb_strpos($current_sel['set_text'],"@")===0){
+                $current_sel['set_text'] = $this->content_properties[$current_sel['set_text']];
+            }
+        }
+        array_push($this->selection_contexts, $current_sel);
+    }
+
+    public function _write(){
+        foreach($this->selection_contexts as $op){
+            if(!empty($op['load'])){
+                $this->_preprocess_properties();
+
+            }
+        }
+        foreach($this->selection_contexts as $op){
+            $current_theme = strval($this->current_theme);
+
+            switch($op['op']) {
+                case "select":
+                    $modified_theme= $this->handle_select($current_theme, $op['selector'],$op['set_text'], $op['set_attributes']);
+                    break;
+                case "remove":
+                    $modified_theme = $this->handle_remove($current_theme, $op['selector']);
+                    break;
+                case "create":
+                    $modified_theme = $this->handle_create($current_theme, $op['tag'], $op['target'], $op['insert_type'], $op['set_text'], $op['set_attributes']);
+                    break;
+            }
+            $this->current_theme = str_get_html($modified_theme);
+
+        }
+
+        $this->selection_contexts = array();
+    }
+
 
     public function execute()
     {
@@ -260,28 +444,45 @@ class Belvedere
             }
             
             ob_start();
-            
-            $theme = file_get_html($this->base_dir . DIRECTORY_SEPARATOR . "themes" . DIRECTORY_SEPARATOR . $this->site_config['theme'] . "/" . $page['skin']);
-            $theme->find("meta[name=description]", 0)->content = $this->site_config['description'];
-            $meta_robots = $theme->find("meta[name=robots]", 0);
+
+            $this->_setTheme($this->base_dir . DIRECTORY_SEPARATOR . "themes" . DIRECTORY_SEPARATOR . $this->site_config['theme'] . "/" . $page['skin']);
+            //$theme = file_get_html($this->base_dir . DIRECTORY_SEPARATOR . "themes" . DIRECTORY_SEPARATOR . $this->site_config['theme'] . "/" . $page['skin']);
+            $this->_select("meta[name=description]");
+            $this->_setAttr("content", $this->site_config['description']);
+            $this->_write();
+            //$theme->find("meta[name=description]", 0)->content = $this->site_config['description'];
+            $meta_robots = $this->current_theme->find("meta[name=robots]", 0);
             if (empty($meta_robots)) {
-                $head = $theme->find('head', 0);
-                $head->innertext = "<meta name='robots' content='" . $this->site_config['robots'] . "' />\n" . $head->innertext;
+                $this->_create("meta");
+                $this->_setAttr("name", "robots");
+                $this->_setAttr("content", $this->site_config['robots']);
+                $this->_append("head");
+                $this->_write();
+                //$head = $theme->find('head', 0);
+                //$head->innertext = "<meta name='robots' content='" . $this->site_config['robots'] . "' />\n" . $head->innertext;
             } else {
                 $meta_robots->content = $this->site_config['robots'];
             }
-            $theme->find("title", 0)->innertext = $this->site_config['title'];
-            
+            $this->_select("title");
+            $this->_setText($this->site_config['title']);
+            $this->_write();
+            //$this->current_theme->find("title", 0)->innertext = $this->site_config['title'];
+
+            $this->_select("body");
+            $this->_load("content" . DIRECTORY_SEPARATOR ."about".DIRECTORY_SEPARATOR."about_subtitle.txt");
+            $this->_setAttr("pippo", "@subtitle");
+            $this->_write();
+
             if (array_key_exists("fragments", $page)) {
                 foreach ($page['fragments'] as $fragment) {
                     $this->blv_log("Fragment: " . print_r($fragment, true));
-                    $selected = $theme->find($fragment['selector']);
+                    $selected = $this->current_theme->find($fragment['selector']);
                     foreach ($selected as $s) {
                         if (array_key_exists('innertext', $fragment)) {
                             $s->innertext = $fragment['text'];
                         }
                         if (array_key_exists('clone', $fragment)) {
-                            $subtheme_string = strval($theme->find($fragment['selector'], 0));
+                            $subtheme_string = strval($this->current_theme->find($fragment['selector'], 0));
                             $this->blv_log("Subtheme: " . htmlentities($subtheme_string));
                             $content_dir = "content" . DIRECTORY_SEPARATOR . $fragment['clone']['content-dir'];
                             
@@ -291,7 +492,7 @@ class Belvedere
                                 $this->blv_log("filename: " . $file_name);
                                 $content = file_get_contents($file_name);
                                 $this->blv_log("content: " . htmlentities($content));
-                                $metadata = $this->read_metadata($content);
+                                $metadata = $this->read_properties($content);
                                 $content = $this->read_content($content);
                                 $metadata["@content"] = $content;
                                 $this->blv_log("metadata: " . htmlentities(print_r($metadata, true)));
@@ -324,7 +525,7 @@ class Belvedere
                                 $cloned_tags .= strval($subtheme);
                                 $this->blv_log("cloned_tags current: " . htmlentities($cloned_tags));
                             }
-                            $theme->find($fragment['selector'], 0)->parent()->innertext = $cloned_tags;
+                            $this->current_theme->find($fragment['selector'], 0)->parent()->innertext = $cloned_tags;
                             break;
                         } elseif (array_key_exists('content', $fragment)) {
                             if (is_array($fragment['content'])) {
@@ -335,7 +536,7 @@ class Belvedere
                                         $this->blv_log("filename: " . $file_name);
                                         $content = file_get_contents($file_name);
                                         $this->blv_log("content: " . htmlentities($content));
-                                        $metadata = $this->read_metadata($content);
+                                        $metadata = $this->read_properties($content);
                                         $content = $this->read_content($content);
                                         $metadata["@content"] = $content;
                                         $this->blv_log("metadata: " . htmlentities(print_r($metadata, true)));
@@ -395,13 +596,14 @@ class Belvedere
                         
                         if (array_key_exists('remove', $fragment) && $fragment['remove'] === true) {
                             $this->blv_log("Removing fragment: " . $fragment['selector']);
-                            $theme->find($fragment['selector'], 0)->outertext = "";
+                            $this->_remove($fragment['selector']);
+                            $this->_write();
                         }
                     }
                 }
             }
             
-            $html_fragment = $theme->save();
+            $html_fragment = $this->current_theme->save();
             
             echo $html_fragment;
             $html_to_write = ob_get_clean();
