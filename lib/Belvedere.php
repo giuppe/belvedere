@@ -5,6 +5,9 @@ require_once 'vendors/Cake/Utility/Sanitize.php';
 
 mb_internal_encoding("UTF-8");
 
+class BlvSyntaxException extends Exception{};
+class ParentSelectNotExistsException extends BlvSyntaxException{};
+
 class Belvedere
 {
 
@@ -300,6 +303,40 @@ class Belvedere
 
     }
 
+
+
+    public function _subSelect($selector){
+        $parent_sel = null;
+        foreach($this->selection_contexts as $op){
+            if(array_key_exists('subselect', $op)&&$op['subselect']===false){
+                $parent_sel = $op;
+            }
+        }
+        if(empty($parent_sel)){
+            throw new ParentSelectNotExistsException();
+        }
+
+        $new_op = array(
+            "op" => "select",
+            "selector" => $parent_sel['selector']." ".$selector,
+            "subselect" => true,
+        );
+
+        if(array_key_exists('content_properties', $op)){
+            $new_op['content_properties'] = $op['content_properties'];
+        }
+
+        if(array_key_exists('content_text', $op)){
+            $new_op['content_text'] = $op['content_text'];
+        }
+
+        if(array_key_exists('load', $op)){
+            $new_op['load'] = $op['load'];
+        }
+
+        $this->selection_contexts[] = $new_op;
+    }
+
     public function _remove($selector){
         $this->selection_contexts[] = array(
             "op" => "remove",
@@ -312,7 +349,7 @@ class Belvedere
         $this->selection_contexts[] = array(
             "op" => "select",
             "selector" => $selector,
-
+            "subselect" => false
         );
 
     }
@@ -369,43 +406,48 @@ class Belvedere
         return strval($theme);
     }
 
-    private $content_text = "";
-    private $content_properties = array();
+    private function handle_clone($theme_html, $selector, $content_properties=array(), $times=0,$set_text=null, $set_attributes=array()){
+        $theme = str_get_html($theme_html);
+        return strval($theme);
+    }
+
+
     public function _load($filename){
         $this->blv_log("Loading file: ".$filename);
         $content = file_get_contents($filename);
         $this->blv_log("Loaded content: " . htmlentities($content));
-        $this->content_properties = $this->read_properties($content);
-        $this->content_text = $this->read_content($content);
-        $this->content_properties["@content"] = $content;
+
         $current_sel = array_pop($this->selection_contexts);
         $current_sel['load']="file";
+        $current_sel['content_properties'] = $this->read_properties($content);
+        $current_sel['content_text'] = $this->read_content($content);
+        $current_sel['content_properties']['@content'] = $content;
         array_push($this->selection_contexts, $current_sel);
     }
 
-    private function _preprocess_properties(){
-        $current_sel = array_pop($this->selection_contexts);
-        if(!empty($current_sel['set_attributes'])){
-            foreach($current_sel['set_attributes'] as $attr_key=>$attribute){
+    private function _preprocess_properties($op){
+
+        if(!empty($op['set_attributes'])){
+            foreach($op['set_attributes'] as $attr_key=>$attribute){
                 list($attr_name, $attr_value) = each($attribute);
                 if(mb_strpos($attr_value,"@")===0){
-                    $new_attr_value = $this->content_properties[$attr_value];
-                    $current_sel['set_attributes'][$attr_key] = array($attr_name=> $new_attr_value);
+                    $new_attr_value = $op['content_properties'][$attr_value];
+                    $op['set_attributes'][$attr_key] = array($attr_name=> $new_attr_value);
                 }
             }
         }
-        if(!empty($current_sel['set_text'])){
-            if(mb_strpos($current_sel['set_text'],"@")===0){
-                $current_sel['set_text'] = $this->content_properties[$current_sel['set_text']];
+        if(!empty($op['set_text'])){
+            if(mb_strpos($op['set_text'],"@")===0){
+                $op['set_text'] = $op['content_properties'][$op['set_text']];
             }
         }
-        array_push($this->selection_contexts, $current_sel);
+        return $op;
     }
 
     public function _write(){
-        foreach($this->selection_contexts as $op){
+        foreach($this->selection_contexts as $key => $op){
             if(!empty($op['load'])){
-                $this->_preprocess_properties();
+                $this->selection_contexts[$key] = $this->_preprocess_properties($op);
 
             }
         }
@@ -422,6 +464,8 @@ class Belvedere
                 case "create":
                     $modified_theme = $this->handle_create($current_theme, $op['tag'], $op['target'], $op['insert_type'], $op['set_text'], $op['set_attributes']);
                     break;
+                case "clone":
+                    $modified_theme = $this->handle_clone($current_theme, $op['selector'], $op['file_list'], $op['times'],$op['set_text'], $op['set_attributes']);
             }
             $this->current_theme = str_get_html($modified_theme);
 
@@ -471,6 +515,8 @@ class Belvedere
             $this->_select("body");
             $this->_load("content" . DIRECTORY_SEPARATOR ."about".DIRECTORY_SEPARATOR."about_subtitle.txt");
             $this->_setAttr("pippo", "@subtitle");
+            $this->_subSelect("nav div");
+            $this->_setAttr("boh", "chenneso");
             $this->_write();
 
             if (array_key_exists("fragments", $page)) {
