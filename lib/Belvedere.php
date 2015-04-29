@@ -285,7 +285,7 @@ class Belvedere
 
     public function _setText($text){
         $current_sel = array_pop($this->selection_contexts);
-        $current_sel["set_text"] = $text;
+        $current_sel['content_ops']["set_text"] = $text;
         array_push($this->selection_contexts, $current_sel);
     }
 
@@ -297,7 +297,7 @@ class Belvedere
         $current_sel = array_pop($this->selection_contexts);
         //$this->blv_log(sprintf("setAttr %s, %s on %s", $attr,  $content, print_r($this->temp_dom, true)));
 
-            $current_sel['set_attributes'][] = array($attr=>$content);
+            $current_sel['content_ops']['set_attributes'][] = array($attr=>$content);
             array_push($this->selection_contexts, $current_sel);
         }
 
@@ -354,8 +354,11 @@ class Belvedere
 
     }
 
-    private function handle_create($theme_html, $tag, $target, $insert_type="append", $set_text=null, $set_attributes=array()){
+    private function handle_create($theme_html, $tag, $target, $insert_type="append", $content_ops=array()){
         $theme = str_get_html($theme_html);
+        $set_text = (array_key_exists('set_text', $content_ops))? $content_ops['set_text'] : "";
+
+        $set_attributes = (array_key_exists('set_attributes', $content_ops))? $content_ops['set_attributes'] : array();
         $targets = $theme->find($target);
         foreach($targets as $t){
             $new_tag = str_get_html($tag);
@@ -389,8 +392,13 @@ class Belvedere
         return strval($theme);
     }
 
-    private function handle_select($theme_html, $selector, $set_text=null, $set_attributes=array()){
+    private function handle_select($theme_html, $selector, $content_ops=array()){
         $theme = str_get_html($theme_html);
+        $set_text = (array_key_exists('set_text', $content_ops))? $content_ops['set_text'] : "";
+
+        $set_attributes = (array_key_exists('set_attributes', $content_ops))? $content_ops['set_attributes'] : array();
+
+
         $targets = $theme->find($selector);
         foreach($targets as $t){
             if(!empty($set_text)){
@@ -406,8 +414,9 @@ class Belvedere
         return strval($theme);
     }
 
-    private function handle_clone($theme_html, $selector, $content_properties=array(), $times=0,$set_text=null, $set_attributes=array()){
+    private function handle_clone($theme_html, $selector, $content_properties=array(), $times=0,$content_ops=array()){
         $theme = str_get_html($theme_html);
+        //TODO finire funzione clone
         return strval($theme);
     }
 
@@ -427,18 +436,18 @@ class Belvedere
 
     private function _preprocess_properties($op){
 
-        if(!empty($op['set_attributes'])){
-            foreach($op['set_attributes'] as $attr_key=>$attribute){
+        if(!empty($op['content_ops']['set_attributes'])){
+            foreach($op['content_ops']['set_attributes'] as $attr_key=>$attribute){
                 list($attr_name, $attr_value) = each($attribute);
                 if(mb_strpos($attr_value,"@")===0){
                     $new_attr_value = $op['content_properties'][$attr_value];
-                    $op['set_attributes'][$attr_key] = array($attr_name=> $new_attr_value);
+                    $op['content_ops']['set_attributes'][$attr_key] = array($attr_name=> $new_attr_value);
                 }
             }
         }
         if(!empty($op['set_text'])){
-            if(mb_strpos($op['set_text'],"@")===0){
-                $op['set_text'] = $op['content_properties'][$op['set_text']];
+            if(mb_strpos($op['content_ops']['set_text'],"@")===0){
+                $op['content_ops']['set_text'] = $op['content_properties'][$op['content_ops']['set_text']];
             }
         }
         return $op;
@@ -456,16 +465,16 @@ class Belvedere
 
             switch($op['op']) {
                 case "select":
-                    $modified_theme= $this->handle_select($current_theme, $op['selector'],$op['set_text'], $op['set_attributes']);
+                    $modified_theme= $this->handle_select($current_theme, $op['selector'],$op['content_ops']);
                     break;
                 case "remove":
                     $modified_theme = $this->handle_remove($current_theme, $op['selector']);
                     break;
                 case "create":
-                    $modified_theme = $this->handle_create($current_theme, $op['tag'], $op['target'], $op['insert_type'], $op['set_text'], $op['set_attributes']);
+                    $modified_theme = $this->handle_create($current_theme, $op['tag'], $op['target'], $op['insert_type'], $op['content_ops']);
                     break;
                 case "clone":
-                    $modified_theme = $this->handle_clone($current_theme, $op['selector'], $op['file_list'], $op['times'],$op['set_text'], $op['set_attributes']);
+                    $modified_theme = $this->handle_clone($current_theme, $op['selector'], $op['file_list'], $op['times'],$op['content_ops']);
             }
             $this->current_theme = str_get_html($modified_theme);
 
@@ -553,7 +562,7 @@ class Belvedere
                                         if(array_key_exists($tag, $metadata)){
                                             $metadata_tag = $metadata[$tag];
                                         }
-                                      @  $subtheme->find($subfragment['selector'], 0)->innertext = $metadata_tag;
+                                        $subtheme->find($subfragment['selector'], 0)->innertext = $metadata_tag;
                                     } else {
                                         $old_classes = "";
                                         if ($subfragment['attr'] == 'addClass') {
